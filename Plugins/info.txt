@@ -1,0 +1,3 @@
+If you're using the Projucer, plug-ins built from the workspace will be copied into this directory.
+
+If you're using CMake, built plug-ins can be found in your build directory.
