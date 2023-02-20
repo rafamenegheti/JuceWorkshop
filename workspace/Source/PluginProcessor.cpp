@@ -21,8 +21,12 @@ SimpleDelayAudioProcessor::SimpleDelayAudioProcessor()
                      #endif
                        )
 #endif
+    , state (*this, nullptr, "STATE", {
+        std::make_unique<juce::AudioParameterFloat> ("gain",     "Gain",           0.0f, 1.0f, 1.0f),
+        std::make_unique<juce::AudioParameterFloat> ("feedback", "Delay Feedback", 0.0f, 1.0f, 0.35f),
+        std::make_unique<juce::AudioParameterFloat> ("mix",      "Dry / Wet",      0.0f, 1.0f, 0.5f)
+    })
 {
-    addParameter (new juce::AudioParameterFloat ("gain", "Gain", 0.0f, 1.0f, 1.0f));
 }
 
 SimpleDelayAudioProcessor::~SimpleDelayAudioProcessor()
@@ -96,6 +100,12 @@ void SimpleDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
+    
+    int delayMilliseconds = 200;
+    auto delaySamples = (int) std::round (sampleRate * delayMilliseconds / 1000.0);
+    delayBuffer.setSize (2, delaySamples);
+    delayBuffer.clear();
+    delayBufferPos = 0;
 }
 
 void SimpleDelayAudioProcessor::releaseResources()
@@ -151,16 +161,37 @@ void SimpleDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    juce::AudioProcessorParameter* gainParameter = getParameters()[0];
-    float gain = gainParameter->getValue();
+
+    float gain     = state.getParameter ("gain")->getValue();
+    float feedback = state.getParameter ("feedback")->getValue();
+    float mix      = state.getParameter ("mix")->getValue();
+
+    int delayBufferSize = delayBuffer.getNumSamples();
 
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
         float* channelData = buffer.getWritePointer (channel);
+        int delayPos = delayBufferPos;
 
-        for (int i = 0; i < buffer.getNumSamples(); i++)
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            float drySample = channelData[i];
+
+            float delaySample = delayBuffer.getSample (channel, delayPos) * feedback;
+            delayBuffer.setSample (channel, delayPos, drySample + delaySample);
+
+            delayPos++;
+            if (delayPos == delayBufferSize)
+                delayPos = 0;
+
+            channelData[i] = (drySample * (1.0f - mix)) + (delaySample * mix);
             channelData[i] *= gain;
+        }
     }
+
+    delayBufferPos += buffer.getNumSamples();
+    if (delayBufferPos >= delayBufferSize)
+        delayBufferPos -= delayBufferSize;
 }
 
 //==============================================================================
@@ -171,8 +202,8 @@ bool SimpleDelayAudioProcessor::hasEditor() const
 
 juce::AudioProcessorEditor* SimpleDelayAudioProcessor::createEditor()
 {
-    // return new SimpleDelayAudioProcessorEditor (*this);
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new SimpleDelayAudioProcessorEditor (*this);
+    // return new juce::GenericAudioProcessorEditor (*this);
 }
 
 //==============================================================================
@@ -181,12 +212,18 @@ void SimpleDelayAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     // You should use this method to store your parameters in the memory block.
     // You could do that either as raw data, or use the XML or ValueTree classes
     // as intermediaries to make it easy to save and load complex data.
+    
+    if (auto xmlState = state.copyState().createXml())
+        copyXmlToBinary (*xmlState, destData);
 }
 
 void SimpleDelayAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // You should use this method to restore your parameters from this memory block,
     // whose contents will have been created by the getStateInformation() call.
+    
+    if (auto xmlState = getXmlFromBinary (data, sizeInBytes))
+        state.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 
 //==============================================================================
